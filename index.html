@@ -1,0 +1,727 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Classic Pac-Man arcade game clone built with HTML5 Canvas">
+  <title>Pac-Man Clone</title>
+  <style>
+    /* =========================================================
+       GLOBAL STYLES
+       ========================================================= */
+    @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: #000;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      font-family: 'Press Start 2P', monospace;
+      color: #fff;
+      overflow: hidden;
+    }
+
+    h1 {
+      font-size: 28px;
+      color: #ffe100;
+      text-shadow: 0 0 10px #ffe100, 0 0 30px #ff8c00;
+      margin-bottom: 10px;
+      letter-spacing: 4px;
+    }
+
+    /* HUD: score display */
+    #hud {
+      display: flex;
+      justify-content: space-between;
+      width: 420px;
+      padding: 8px 4px;
+      font-size: 13px;
+    }
+    #hud span { color: #fff; }
+    #hud .label { color: #aaa; }
+
+    /* Canvas wrapper */
+    #game-wrapper {
+      position: relative;
+      border: 3px solid #2121de;
+      border-radius: 6px;
+      box-shadow: 0 0 20px #2121de88, inset 0 0 20px #00000080;
+    }
+
+    canvas {
+      display: block;
+      background: #000;
+    }
+
+    /* Overlay screens (win / game-over) */
+    #overlay {
+      display: none;
+      position: absolute;
+      inset: 0;
+      background: rgba(0,0,0,0.82);
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 20px;
+      z-index: 10;
+    }
+    #overlay.show { display: flex; }
+    #overlay h2 {
+      font-size: 22px;
+      text-shadow: 0 0 12px currentColor;
+    }
+    #overlay .win  { color: #0f0; }
+    #overlay .lose { color: #f00; }
+    #overlay .sub  { font-size: 11px; color: #ccc; }
+
+    #restart-btn {
+      font-family: 'Press Start 2P', monospace;
+      font-size: 12px;
+      padding: 12px 28px;
+      background: transparent;
+      color: #ffe100;
+      border: 2px solid #ffe100;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    #restart-btn:hover {
+      background: #ffe100;
+      color: #000;
+      box-shadow: 0 0 16px #ffe10088;
+    }
+
+    /* Small ready / info text */
+    #info {
+      margin-top: 8px;
+      font-size: 9px;
+      color: #555;
+      letter-spacing: 1px;
+    }
+  </style>
+</head>
+<body>
+
+<h1>PAC-MAN</h1>
+
+<!-- HUD -->
+<div id="hud">
+  <div><span class="label">SCORE </span><span id="score-display">0</span></div>
+  <div><span class="label">HIGH </span><span id="high-display">0</span></div>
+</div>
+
+<!-- Game canvas + overlay -->
+<div id="game-wrapper">
+  <canvas id="game" width="420" height="420"></canvas>
+
+  <div id="overlay">
+    <h2 id="overlay-title"></h2>
+    <p class="sub" id="overlay-sub"></p>
+    <button id="restart-btn">PLAY AGAIN</button>
+  </div>
+</div>
+
+<p id="info">ARROW KEYS / WASD TO MOVE</p>
+
+<script>
+/* =============================================================
+   PAC-MAN CLONE — ALL-IN-ONE
+   Step 1: Grid & Maze
+   Step 2: Pac-Man Movement
+   Step 3: Pellets & Scoring
+   Step 4: One Ghost (random)
+   Step 5: BFS Ghost + Frightened Mode
+   ============================================================= */
+
+// ─── CONSTANTS ───────────────────────────────────────────────
+const TILE   = 20;           // px per tile
+const COLS   = 21;
+const ROWS   = 21;
+const canvas = document.getElementById('game');
+const ctx    = canvas.getContext('2d');
+
+// ─── STEP 1 — MAZE (21×21) ──────────────────────────────────
+// 1 = wall, 0 = path, 2 = power-pellet corner
+// The maze is symmetric and has a classic feel.
+const MAZE_TEMPLATE = [
+  [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+  [1,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,1],
+  [1,0,1,1,0,1,1,1,0,0,1,0,0,1,1,1,0,1,1,0,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,0,1,1,0,1,0,1,1,1,1,1,1,1,0,1,0,1,1,0,1],
+  [1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1],
+  [1,1,1,1,0,1,1,1,0,0,1,0,0,1,1,1,0,1,1,1,1],
+  [1,1,1,1,0,1,0,0,0,0,0,0,0,0,0,1,0,1,1,1,1],
+  [1,1,1,1,0,1,0,1,1,0,0,0,1,1,0,1,0,1,1,1,1],
+  [0,0,0,0,0,0,0,1,0,0,0,0,0,1,0,0,0,0,0,0,0],
+  [1,1,1,1,0,1,0,1,1,1,1,1,1,1,0,1,0,1,1,1,1],
+  [1,1,1,1,0,1,0,0,0,0,0,0,0,0,0,1,0,1,1,1,1],
+  [1,1,1,1,0,1,0,1,1,1,1,1,1,1,0,1,0,1,1,1,1],
+  [1,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,1],
+  [1,0,1,1,0,1,1,1,0,0,1,0,0,1,1,1,0,1,1,0,1],
+  [1,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,1],
+  [1,1,0,1,0,1,0,1,1,1,1,1,1,1,0,1,0,1,0,1,1],
+  [1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1],
+  [1,0,1,1,1,1,1,1,0,0,1,0,0,1,1,1,1,1,1,0,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+];
+
+// ─── GAME STATE ──────────────────────────────────────────────
+let maze, pellets, score, highScore, totalPellets;
+let pacman, ghost;
+let gameOver, gameWon, running;
+let frightenedTimer;
+
+// UI refs
+const scoreEl   = document.getElementById('score-display');
+const highEl    = document.getElementById('high-display');
+const overlay   = document.getElementById('overlay');
+const overlayT  = document.getElementById('overlay-title');
+const overlaySub = document.getElementById('overlay-sub');
+const restartBtn = document.getElementById('restart-btn');
+
+highScore = parseInt(localStorage.getItem('pacHighScore') || '0', 10);
+highEl.textContent = highScore;
+
+/* =============================================================
+   INIT / RESET
+   ============================================================= */
+function init() {
+  // Deep-copy the maze template
+  maze = MAZE_TEMPLATE.map(r => [...r]);
+
+  // Build pellet map: every path tile gets a pellet
+  // Step 5 — corners get power pellets (value 2)
+  pellets = [];
+  totalPellets = 0;
+  for (let r = 0; r < ROWS; r++) {
+    pellets[r] = [];
+    for (let c = 0; c < COLS; c++) {
+      if (maze[r][c] === 0) {
+        pellets[r][c] = 1;  // normal pellet
+        totalPellets++;
+      } else {
+        pellets[r][c] = 0;
+      }
+    }
+  }
+
+  // Step 5 — Place power pellets at four accessible corners
+  const powerPositions = [
+    [1, 1], [1, 19], [19, 1], [19, 19]
+  ];
+  powerPositions.forEach(([r, c]) => {
+    if (maze[r][c] === 0) {
+      pellets[r][c] = 2; // power pellet
+    }
+  });
+
+  score = 0;
+  scoreEl.textContent = '0';
+  gameOver = false;
+  gameWon  = false;
+  running  = true;
+  frightenedTimer = 0;
+
+  // Step 2 — Pac-Man starting position
+  pacman = {
+    row: 15, col: 10,      // starting tile
+    dir: { r: 0, c: 0 },   // current direction
+    nextDir: { r: 0, c: 0 },// buffered direction
+    mouthAngle: 0.25,       // animation mouth opening (0-0.3)
+    mouthOpen: true,
+    moveTimer: 0,
+    moveDelay: 16,          // frames between moves (~3.75 tiles/sec at 60fps)
+  };
+
+  // Step 4/5 — Ghost starting position (centre of the ghost house)
+  ghost = {
+    row: 9, col: 10,
+    dir: { r: 0, c: -1 },
+    moveTimer: 0,
+    moveDelay: 20,          // slower than Pac-Man for fairness
+    frightened: false,
+    eaten: false,
+    // BFS path cache
+    path: [],
+    pathTimer: 0,
+    pathInterval: 20, // re-calculate path every N frames
+  };
+
+  // Hide overlay
+  overlay.classList.remove('show');
+}
+
+/* =============================================================
+   STEP 1 — RENDER THE MAZE
+   ============================================================= */
+function drawMaze() {
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      if (maze[r][c] === 1) {
+        // Wall tile — blue with subtle inner highlight
+        const x = c * TILE;
+        const y = r * TILE;
+        ctx.fillStyle = '#2121de';
+        ctx.fillRect(x, y, TILE, TILE);
+        // Inner border for depth
+        ctx.fillStyle = '#1818a7';
+        ctx.fillRect(x + 2, y + 2, TILE - 4, TILE - 4);
+      }
+    }
+  }
+}
+
+/* =============================================================
+   STEP 3 — RENDER PELLETS
+   ============================================================= */
+function drawPellets() {
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      const px = c * TILE + TILE / 2;
+      const py = r * TILE + TILE / 2;
+
+      if (pellets[r][c] === 1) {
+        // Small white pellet dot
+        ctx.fillStyle = '#ffccaa';
+        ctx.beginPath();
+        ctx.arc(px, py, 2.5, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (pellets[r][c] === 2) {
+        // Step 5 — Power pellet (larger, pulsing)
+        const pulse = 4 + Math.sin(Date.now() / 200) * 1.5;
+        ctx.fillStyle = '#fff';
+        ctx.beginPath();
+        ctx.arc(px, py, pulse, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
+}
+
+/* =============================================================
+   STEP 2 — PAC-MAN INPUT & MOVEMENT
+   ============================================================= */
+
+// Direction map for arrow keys + WASD
+const KEY_MAP = {
+  ArrowUp:    { r: -1, c:  0 },
+  ArrowDown:  { r:  1, c:  0 },
+  ArrowLeft:  { r:  0, c: -1 },
+  ArrowRight: { r:  0, c:  1 },
+  w: { r: -1, c:  0 }, W: { r: -1, c:  0 },
+  s: { r:  1, c:  0 }, S: { r:  1, c:  0 },
+  a: { r:  0, c: -1 }, A: { r:  0, c: -1 },
+  d: { r:  0, c:  1 }, D: { r:  0, c:  1 },
+};
+
+document.addEventListener('keydown', (e) => {
+  const d = KEY_MAP[e.key];
+  if (d) {
+    e.preventDefault();
+    // Buffer the next direction for responsive turning
+    pacman.nextDir = { ...d };
+  }
+});
+
+// Check if a tile is walkable
+function isWalkable(row, col) {
+  // Wrap around for the tunnel on row 9
+  if (col < 0) col = COLS - 1;
+  if (col >= COLS) col = 0;
+  if (row < 0 || row >= ROWS) return false;
+  return maze[row][col] === 0;
+}
+
+function updatePacman() {
+  pacman.moveTimer++;
+  if (pacman.moveTimer < pacman.moveDelay) return;
+  pacman.moveTimer = 0;
+
+  // Try the buffered direction first
+  const nr = pacman.row + pacman.nextDir.r;
+  const nc = pacman.col + pacman.nextDir.c;
+  if (isWalkable(nr, nc)) {
+    pacman.dir = { ...pacman.nextDir };
+  }
+
+  // Move in current direction
+  let newR = pacman.row + pacman.dir.r;
+  let newC = pacman.col + pacman.dir.c;
+
+  // Tunnel wrap
+  if (newC < 0)     newC = COLS - 1;
+  if (newC >= COLS)  newC = 0;
+
+  if (isWalkable(newR, newC)) {
+    pacman.row = newR;
+    pacman.col = newC;
+
+    // Animate mouth
+    if (pacman.mouthOpen) {
+      pacman.mouthAngle += 0.07;
+      if (pacman.mouthAngle >= 0.3) pacman.mouthOpen = false;
+    } else {
+      pacman.mouthAngle -= 0.07;
+      if (pacman.mouthAngle <= 0.02) pacman.mouthOpen = true;
+    }
+
+    // Step 3 — Eat pellet
+    if (pellets[pacman.row][pacman.col] === 1) {
+      pellets[pacman.row][pacman.col] = 0;
+      score += 10;
+      totalPellets--;
+    }
+    // Step 5 — Eat power pellet → frightened mode
+    else if (pellets[pacman.row][pacman.col] === 2) {
+      pellets[pacman.row][pacman.col] = 0;
+      score += 50;
+      totalPellets--;
+      // Activate frightened mode — clear stale BFS path to prevent teleporting
+      ghost.frightened = true;
+      ghost.path = [];
+      ghost.pathTimer = 0;
+      frightenedTimer = 480; // ~8 seconds at 60fps
+    }
+
+    scoreEl.textContent = score;
+
+    // Step 3 — Win condition
+    if (totalPellets <= 0) {
+      gameWon = true;
+      running = false;
+    }
+  }
+}
+
+function drawPacman() {
+  const cx = pacman.col * TILE + TILE / 2;
+  const cy = pacman.row * TILE + TILE / 2;
+  const radius = TILE / 2 - 1;
+
+  // Determine facing angle
+  let angle = 0; // right
+  if (pacman.dir.r === -1) angle = -Math.PI / 2;  // up
+  if (pacman.dir.r ===  1) angle = Math.PI / 2;   // down
+  if (pacman.dir.c === -1) angle = Math.PI;         // left
+
+  const mouth = pacman.mouthAngle * Math.PI;
+
+  ctx.fillStyle = '#ffe100';
+  ctx.beginPath();
+  ctx.moveTo(cx, cy);
+  ctx.arc(cx, cy, radius, angle + mouth, angle + Math.PI * 2 - mouth);
+  ctx.closePath();
+  ctx.fill();
+
+  // Eye
+  const eyeOffX = Math.cos(angle - 0.5) * 4;
+  const eyeOffY = Math.sin(angle - 0.5) * 4;
+  ctx.fillStyle = '#000';
+  ctx.beginPath();
+  ctx.arc(cx + eyeOffX, cy + eyeOffY, 1.5, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+/* =============================================================
+   STEP 4 & 5 — GHOST LOGIC
+   ============================================================= */
+
+// BFS pathfinding (Step 5) — returns array of {r, c} from ghost → pac
+function bfs(startR, startC, targetR, targetC) {
+  const visited = Array.from({ length: ROWS }, () => new Array(COLS).fill(false));
+  const parent  = Array.from({ length: ROWS }, () => new Array(COLS).fill(null));
+  const queue   = [{ r: startR, c: startC }];
+  visited[startR][startC] = true;
+
+  const dirs = [
+    { r: -1, c: 0 }, { r: 1, c: 0 },
+    { r: 0, c: -1 }, { r: 0, c: 1 },
+  ];
+
+  while (queue.length > 0) {
+    const cur = queue.shift();
+    if (cur.r === targetR && cur.c === targetC) {
+      // Reconstruct path
+      const path = [];
+      let node = cur;
+      while (parent[node.r][node.c]) {
+        path.unshift(node);
+        node = parent[node.r][node.c];
+      }
+      return path;
+    }
+    for (const d of dirs) {
+      let nr = cur.r + d.r;
+      let nc = cur.c + d.c;
+      // Tunnel wrap
+      if (nc < 0) nc = COLS - 1;
+      if (nc >= COLS) nc = 0;
+      if (nr >= 0 && nr < ROWS && !visited[nr][nc] && maze[nr][nc] === 0) {
+        visited[nr][nc] = true;
+        parent[nr][nc] = cur;
+        queue.push({ r: nr, c: nc });
+      }
+    }
+  }
+  return []; // no path found
+}
+
+// Get valid neighbour directions for the ghost
+function getValidDirs(row, col) {
+  const dirs = [
+    { r: -1, c: 0 }, { r: 1, c: 0 },
+    { r: 0, c: -1 }, { r: 0, c: 1 },
+  ];
+  return dirs.filter(d => {
+    let nr = row + d.r;
+    let nc = col + d.c;
+    if (nc < 0) nc = COLS - 1;
+    if (nc >= COLS) nc = 0;
+    return nr >= 0 && nr < ROWS && maze[nr][nc] === 0;
+  });
+}
+
+function updateGhost() {
+  // Frightened timer countdown
+  if (ghost.frightened) {
+    frightenedTimer--;
+    if (frightenedTimer <= 0) {
+      ghost.frightened = false;
+      // Clear stale path so BFS recalculates from current position
+      ghost.path = [];
+      ghost.pathTimer = 0;
+    }
+  }
+
+  ghost.moveTimer++;
+  const delay = ghost.frightened ? ghost.moveDelay + 3 : ghost.moveDelay;
+  if (ghost.moveTimer < delay) return;
+  ghost.moveTimer = 0;
+
+  // Step 5 — BFS pathfinding (only when NOT frightened)
+  if (!ghost.frightened) {
+    ghost.pathTimer++;
+    if (ghost.pathTimer >= ghost.pathInterval || ghost.path.length === 0) {
+      ghost.pathTimer = 0;
+      ghost.path = bfs(ghost.row, ghost.col, pacman.row, pacman.col);
+    }
+
+    if (ghost.path.length > 0) {
+      const next = ghost.path[0];
+      // Only follow the path if the next step is adjacent (prevents teleporting)
+      const dr = Math.abs(next.r - ghost.row);
+      const dc = Math.abs(next.c - ghost.col);
+      const isAdjacent = (dr + dc === 1) || (dr === 0 && dc === COLS - 1); // tunnel wrap
+      if (isAdjacent) {
+        ghost.path.shift();
+        ghost.dir = { r: next.r - ghost.row, c: next.c - ghost.col };
+        ghost.row = next.r;
+        ghost.col = next.c;
+      } else {
+        // Path is stale, force recalculation
+        ghost.path = bfs(ghost.row, ghost.col, pacman.row, pacman.col);
+        ghost.pathTimer = 0;
+      }
+    } else {
+      // Fallback: random valid direction
+      moveGhostRandom();
+    }
+  } else {
+    // Frightened: move away from Pac-Man (pick direction that maximises distance)
+    moveGhostFrightened();
+  }
+
+  // Collision check
+  if (ghost.row === pacman.row && ghost.col === pacman.col) {
+    if (ghost.frightened) {
+      // Pac-Man eats the ghost!
+      score += 200;
+      scoreEl.textContent = score;
+      // Reset ghost to centre
+      ghost.row = 9;
+      ghost.col = 10;
+      ghost.frightened = false;
+      frightenedTimer = 0;
+      ghost.path = [];
+    } else {
+      // Game over
+      gameOver = true;
+      running  = false;
+    }
+  }
+}
+
+// Random movement fallback (Step 4 base behaviour)
+function moveGhostRandom() {
+  const valid = getValidDirs(ghost.row, ghost.col);
+  if (valid.length === 0) return;
+
+  // Prefer not reversing direction
+  const noReverse = valid.filter(d =>
+    !(d.r === -ghost.dir.r && d.c === -ghost.dir.c)
+  );
+  const choices = noReverse.length > 0 ? noReverse : valid;
+  const pick = choices[Math.floor(Math.random() * choices.length)];
+
+  ghost.dir = pick;
+  let nr = ghost.row + pick.r;
+  let nc = ghost.col + pick.c;
+  if (nc < 0) nc = COLS - 1;
+  if (nc >= COLS) nc = 0;
+  ghost.row = nr;
+  ghost.col = nc;
+}
+
+// Frightened: run away from Pac-Man
+function moveGhostFrightened() {
+  const valid = getValidDirs(ghost.row, ghost.col);
+  if (valid.length === 0) return;
+
+  // Pick direction that maximises distance from Pac-Man
+  let best = valid[0];
+  let bestDist = -1;
+  for (const d of valid) {
+    let nr = ghost.row + d.r;
+    let nc = ghost.col + d.c;
+    if (nc < 0) nc = COLS - 1;
+    if (nc >= COLS) nc = 0;
+    const dist = Math.abs(nr - pacman.row) + Math.abs(nc - pacman.col);
+    if (dist > bestDist) {
+      bestDist = dist;
+      best = d;
+    }
+  }
+  ghost.dir = best;
+  let nr = ghost.row + best.r;
+  let nc = ghost.col + best.c;
+  if (nc < 0) nc = COLS - 1;
+  if (nc >= COLS) nc = 0;
+  ghost.row = nr;
+  ghost.col = nc;
+}
+
+// Draw the ghost (classic shape)
+function drawGhost() {
+  const cx = ghost.col * TILE + TILE / 2;
+  const cy = ghost.row * TILE + TILE / 2;
+  const r  = TILE / 2 - 1;
+
+  // Body colour
+  if (ghost.frightened) {
+    // Flashing when nearly over
+    if (frightenedTimer < 120 && Math.floor(frightenedTimer / 15) % 2 === 0) {
+      ctx.fillStyle = '#fff';
+    } else {
+      ctx.fillStyle = '#2121de';
+    }
+  } else {
+    ctx.fillStyle = '#ff0000';
+  }
+
+  // Ghost body shape: dome top + wavy bottom
+  ctx.beginPath();
+  ctx.arc(cx, cy - 2, r, Math.PI, 0, false); // dome
+  ctx.lineTo(cx + r, cy + r - 2);
+  // Wavy bottom
+  const wave = r / 3;
+  ctx.lineTo(cx + r - wave, cy + r - 5);
+  ctx.lineTo(cx + r - wave * 2, cy + r - 2);
+  ctx.lineTo(cx, cy + r - 5);
+  ctx.lineTo(cx - r + wave * 2, cy + r - 2);
+  ctx.lineTo(cx - r + wave, cy + r - 5);
+  ctx.lineTo(cx - r, cy + r - 2);
+  ctx.closePath();
+  ctx.fill();
+
+  // Eyes
+  const eyeColor = ghost.frightened ? '#fff' : '#fff';
+  const pupilColor = ghost.frightened ? '#f00' : '#00f';
+
+  // Left eye
+  ctx.fillStyle = eyeColor;
+  ctx.beginPath();
+  ctx.arc(cx - 3, cy - 3, 3, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = pupilColor;
+  ctx.beginPath();
+  ctx.arc(cx - 3 + ghost.dir.c, cy - 3 + ghost.dir.r, 1.5, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Right eye
+  ctx.fillStyle = eyeColor;
+  ctx.beginPath();
+  ctx.arc(cx + 3, cy - 3, 3, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = pupilColor;
+  ctx.beginPath();
+  ctx.arc(cx + 3 + ghost.dir.c, cy - 3 + ghost.dir.r, 1.5, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+/* =============================================================
+   OVERLAY SCREENS
+   ============================================================= */
+function showOverlay() {
+  if (gameWon) {
+    overlayT.textContent = 'YOU WIN!';
+    overlayT.className = 'win';
+    overlaySub.textContent = `Final Score: ${score}`;
+  } else if (gameOver) {
+    overlayT.textContent = 'GAME OVER';
+    overlayT.className = 'lose';
+    overlaySub.textContent = `Score: ${score}`;
+  }
+
+  // Update high score
+  if (score > highScore) {
+    highScore = score;
+    localStorage.setItem('pacHighScore', highScore);
+    highEl.textContent = highScore;
+  }
+
+  overlay.classList.add('show');
+}
+
+restartBtn.addEventListener('click', () => {
+  init();
+  requestAnimationFrame(gameLoop);
+});
+
+/* =============================================================
+   GAME LOOP — requestAnimationFrame
+   ============================================================= */
+function gameLoop() {
+  if (!running) {
+    showOverlay();
+    return;
+  }
+
+  // Clear canvas
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // Update
+  updatePacman();
+  updateGhost();
+
+  // Draw
+  drawMaze();
+  drawPellets();
+  drawPacman();
+  drawGhost();
+
+  requestAnimationFrame(gameLoop);
+}
+
+// ─── START ───────────────────────────────────────────────────
+init();
+requestAnimationFrame(gameLoop);
+</script>
+
+</body>
+</html>
