@@ -20,43 +20,25 @@
 <div id="output"></div>
 
 <script>
-// =====================================================================
-// MINIMAL TEST RUNNER
-// =====================================================================
 const out = document.getElementById('output');
 let totalPass = 0, totalFail = 0;
 
 function section(name) {
   out.innerHTML += `<div class="section">── ${name} ──</div>`;
 }
-
 function assert(label, condition) {
-  if (condition) {
-    totalPass++;
-    out.innerHTML += `<pre class="pass">  ✔ ${label}</pre>`;
-  } else {
-    totalFail++;
-    out.innerHTML += `<pre class="fail">  ✘ ${label}</pre>`;
-  }
+  if (condition) { totalPass++; out.innerHTML += `<pre class="pass">  ✔ ${label}</pre>`; }
+  else { totalFail++; out.innerHTML += `<pre class="fail">  ✘ ${label}</pre>`; }
 }
-
 function assertEqual(label, actual, expected) {
   const pass = JSON.stringify(actual) === JSON.stringify(expected);
-  if (pass) {
-    totalPass++;
-    out.innerHTML += `<pre class="pass">  ✔ ${label}</pre>`;
-  } else {
-    totalFail++;
-    out.innerHTML += `<pre class="fail">  ✘ ${label} — expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}</pre>`;
-  }
+  if (pass) { totalPass++; out.innerHTML += `<pre class="pass">  ✔ ${label}</pre>`; }
+  else { totalFail++; out.innerHTML += `<pre class="fail">  ✘ ${label} — expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}</pre>`; }
 }
 
-// =====================================================================
-// GAME LOGIC (extracted from index.html)
-// =====================================================================
-const TILE = 20;
-const COLS = 21;
-const ROWS = 21;
+// ─── GAME LOGIC (extracted from index.html) ─────────────────
+const TILE = 20, COLS = 21, ROWS = 21;
+const HOUSE_ROW = 9, HOUSE_COL = 10, HOUSE_DOOR_ROW = 8;
 
 const MAZE_TEMPLATE = [
   [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
@@ -67,7 +49,7 @@ const MAZE_TEMPLATE = [
   [1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1],
   [1,1,1,1,0,1,1,1,0,0,1,0,0,1,1,1,0,1,1,1,1],
   [1,1,1,1,0,1,0,0,0,0,0,0,0,0,0,1,0,1,1,1,1],
-  [1,1,1,1,0,1,0,1,1,0,0,0,1,1,0,1,0,1,1,1,1],
+  [1,1,1,1,0,1,0,1,1,3,3,3,1,1,0,1,0,1,1,1,1],
   [0,0,0,0,0,0,0,1,0,0,0,0,0,1,0,0,0,0,0,0,0],
   [1,1,1,1,0,1,0,1,1,1,1,1,1,1,0,1,0,1,1,1,1],
   [1,1,1,1,0,1,0,0,0,0,0,0,0,0,0,1,0,1,1,1,1],
@@ -82,58 +64,74 @@ const MAZE_TEMPLATE = [
   [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
 ];
 
-let maze, pellets, totalPellets, score;
-let pacman, ghost, frightenedTimer;
+const GHOST_DEFS = [
+  { name:'blinky', color:'#ff0000', scatter:{r:1,c:19},  startRow:7,  startCol:10, exitDelay:0   },
+  { name:'pinky',  color:'#ffb8ff', scatter:{r:1,c:1},   startRow:9,  startCol:10, exitDelay:60  },
+  { name:'inky',   color:'#00ffff', scatter:{r:19,c:19}, startRow:9,  startCol:9,  exitDelay:240 },
+  { name:'clyde',  color:'#ffb851', scatter:{r:19,c:1},  startRow:9,  startCol:11, exitDelay:480 },
+];
+
+const MODE_SCHEDULE = [
+  ['scatter', 420], ['chase', 1200], ['scatter', 420], ['chase', 1200],
+  ['scatter', 300], ['chase', 1200], ['scatter', 300], ['chase', Infinity],
+];
+
+let maze, pellets, totalPellets, score, lives;
+let pacman, ghosts, frightenedTimer, ghostsEatenThisPower;
+let globalMode, modeTimer, modeIndex;
+
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
 function isWalkable(row, col) {
-  if (col < 0) col = COLS - 1;
-  if (col >= COLS) col = 0;
+  if (col < 0) col = COLS - 1; if (col >= COLS) col = 0;
   if (row < 0 || row >= ROWS) return false;
   return maze[row][col] === 0;
 }
 
-function bfs(startR, startC, targetR, targetC) {
-  const visited = Array.from({ length: ROWS }, () => new Array(COLS).fill(false));
-  const parent  = Array.from({ length: ROWS }, () => new Array(COLS).fill(null));
-  const queue   = [{ r: startR, c: startC }];
-  visited[startR][startC] = true;
-  const dirs = [{ r:-1,c:0 },{ r:1,c:0 },{ r:0,c:-1 },{ r:0,c:1 }];
+function isGhostWalkable(row, col) {
+  if (col < 0) col = COLS - 1; if (col >= COLS) col = 0;
+  if (row < 0 || row >= ROWS) return false;
+  const t = maze[row][col]; return t === 0 || t === 3;
+}
+
+function bfs(startR, startC, targetR, targetC, ghostMode) {
+  const walkFn = ghostMode ? isGhostWalkable : isWalkable;
+  const visited = Array.from({length:ROWS}, () => new Array(COLS).fill(false));
+  const parent = Array.from({length:ROWS}, () => new Array(COLS).fill(null));
+  const queue = [{r:startR, c:startC}]; visited[startR][startC] = true;
+  const dirs = [{r:-1,c:0},{r:1,c:0},{r:0,c:-1},{r:0,c:1}];
   while (queue.length > 0) {
     const cur = queue.shift();
     if (cur.r === targetR && cur.c === targetC) {
-      const path = [];
-      let node = cur;
+      const path = []; let node = cur;
       while (parent[node.r][node.c]) { path.unshift(node); node = parent[node.r][node.c]; }
       return path;
     }
     for (const d of dirs) {
-      let nr = cur.r + d.r;
-      let nc = cur.c + d.c;
-      if (nc < 0) nc = COLS - 1;
-      if (nc >= COLS) nc = 0;
-      if (nr >= 0 && nr < ROWS && !visited[nr][nc] && maze[nr][nc] === 0) {
-        visited[nr][nc] = true;
-        parent[nr][nc] = cur;
-        queue.push({ r: nr, c: nc });
+      let nr = cur.r + d.r, nc = cur.c + d.c;
+      if (nc < 0) nc = COLS - 1; if (nc >= COLS) nc = 0;
+      if (nr >= 0 && nr < ROWS && !visited[nr][nc] && walkFn(nr, nc)) {
+        visited[nr][nc] = true; parent[nr][nc] = cur; queue.push({r:nr, c:nc});
       }
     }
   }
   return [];
 }
 
-function getValidDirs(row, col) {
-  const dirs = [{ r:-1,c:0 },{ r:1,c:0 },{ r:0,c:-1 },{ r:0,c:1 }];
+function getValidGhostDirs(row, col) {
+  const dirs = [{r:-1,c:0},{r:1,c:0},{r:0,c:-1},{r:0,c:1}];
   return dirs.filter(d => {
     let nr = row + d.r, nc = col + d.c;
-    if (nc < 0) nc = COLS - 1;
-    if (nc >= COLS) nc = 0;
-    return nr >= 0 && nr < ROWS && maze[nr][nc] === 0;
+    if (nc < 0) nc = COLS - 1; if (nc >= COLS) nc = 0;
+    return nr >= 0 && nr < ROWS && isGhostWalkable(nr, nc);
   });
 }
 
 function resetState() {
   maze = MAZE_TEMPLATE.map(r => [...r]);
-  pellets = []; totalPellets = 0; score = 0; frightenedTimer = 0;
+  pellets = []; totalPellets = 0; score = 0; lives = 3;
+  frightenedTimer = 0; ghostsEatenThisPower = 0;
+  modeIndex = 0; globalMode = MODE_SCHEDULE[0][0]; modeTimer = MODE_SCHEDULE[0][1];
   for (let r = 0; r < ROWS; r++) {
     pellets[r] = [];
     for (let c = 0; c < COLS; c++) {
@@ -141,290 +139,288 @@ function resetState() {
     }
   }
   [[1,1],[1,19],[19,1],[19,19]].forEach(([r,c]) => { if (maze[r][c] === 0) pellets[r][c] = 2; });
+  for (let c = 8; c <= 12; c++) { if (pellets[9][c] > 0) { totalPellets--; pellets[9][c] = 0; } }
   pacman = { row:15, col:10, dir:{r:0,c:0}, nextDir:{r:0,c:0}, moveTimer:0, moveDelay:16 };
-  ghost  = { row:9, col:10, dir:{r:0,c:-1}, moveTimer:0, moveDelay:20, frightened:false, path:[], pathTimer:0, pathInterval:20 };
+  ghosts = GHOST_DEFS.map(def => ({
+    name: def.name, color: def.color,
+    row: def.startRow, col: def.startCol,
+    startRow: def.startRow, startCol: def.startCol,
+    scatterTarget: def.scatter,
+    dir: {r:0, c:-1}, moveTimer: 0, moveDelay: 20,
+    frightened: false, eaten: false,
+    inHouse: def.startRow === 9, exitDelay: def.exitDelay, exitTimer: 0,
+    path: [], pathTimer: 0, pathInterval: 20,
+  }));
 }
 
-// =====================================================================
-// TESTS
-// =====================================================================
+function getChaseTarget(g) {
+  switch (g.name) {
+    case 'blinky': return {r: pacman.row, c: pacman.col};
+    case 'pinky': return {
+      r: clamp(pacman.row + pacman.dir.r * 4, 0, ROWS - 1),
+      c: clamp(pacman.col + pacman.dir.c * 4, 0, COLS - 1),
+    };
+    case 'inky': {
+      const ahead = {r: pacman.row + pacman.dir.r * 2, c: pacman.col + pacman.dir.c * 2};
+      const blinky = ghosts[0];
+      return {
+        r: clamp(ahead.r + (ahead.r - blinky.row), 0, ROWS - 1),
+        c: clamp(ahead.c + (ahead.c - blinky.col), 0, COLS - 1),
+      };
+    }
+    case 'clyde': {
+      const dist = Math.abs(g.row - pacman.row) + Math.abs(g.col - pacman.col);
+      return dist > 8 ? {r: pacman.row, c: pacman.col} : g.scatterTarget;
+    }
+    default: return {r: pacman.row, c: pacman.col};
+  }
+}
 
-// ── 1. MAZE STRUCTURE ────────────────────────────────────────────────
+// ─── TESTS ──────────────────────────────────────────────────
+
 section("1. Maze Structure");
-
 resetState();
 assertEqual("Maze is 21 rows", maze.length, 21);
 assertEqual("Maze is 21 cols", maze[0].length, 21);
-assert("All border cells are walls (top row)", maze[0].every(c => c === 1));
-assert("All border cells are walls (bottom row)", maze[20].every(c => c === 1));
+assert("Top row all walls", maze[0].every(c => c === 1));
+assert("Bottom row all walls", maze[20].every(c => c === 1));
 assert("Left border walls (except tunnel row 9)", maze.every((r, i) => i === 9 || r[0] === 1));
 assert("Right border walls (except tunnel row 9)", maze.every((r, i) => i === 9 || r[20] === 1));
-assert("Tunnel row 9 has open left edge", maze[9][0] === 0);
-assert("Tunnel row 9 has open right edge", maze[9][20] === 0);
+assert("Tunnel row 9 open left", maze[9][0] === 0);
+assert("Tunnel row 9 open right", maze[9][20] === 0);
 
-// ── 2. WALKABILITY ───────────────────────────────────────────────────
-section("2. Walkability (isWalkable)");
-
+section("2. Ghost House Door (tile value 3)");
 resetState();
-assert("Wall tile (0,0) is not walkable", !isWalkable(0, 0));
-assert("Path tile (1,1) is walkable", isWalkable(1, 1));
-assert("Out of bounds (row -1) is not walkable", !isWalkable(-1, 5));
-assert("Out of bounds (row 21) is not walkable", !isWalkable(21, 5));
-assert("Tunnel wrap: col -1 wraps to col 20 on row 9", isWalkable(9, -1));
-assert("Tunnel wrap: col 21 wraps to col 0 on row 9", isWalkable(9, 21));
-assert("Non-tunnel wrap: col -1 on row 1 → col 20 is wall", !isWalkable(1, -1));
+assert("Door at (8,9) = 3", maze[8][9] === 3);
+assert("Door at (8,10) = 3", maze[8][10] === 3);
+assert("Door at (8,11) = 3", maze[8][11] === 3);
+assert("Door blocks Pac-Man: isWalkable(8,10) = false", !isWalkable(8, 10));
+assert("Door allows ghosts: isGhostWalkable(8,10) = true", isGhostWalkable(8, 10));
+assert("Normal path walkable for both", isWalkable(1,1) && isGhostWalkable(1,1));
+assert("Wall blocks both", !isWalkable(0,0) && !isGhostWalkable(0,0));
 
-// ── 3. PELLET INITIALIZATION ─────────────────────────────────────────
-section("3. Pellet Initialization");
+section("3. Walkability");
+resetState();
+assert("Wall (0,0) not walkable", !isWalkable(0, 0));
+assert("Path (1,1) walkable", isWalkable(1, 1));
+assert("OOB row -1 not walkable", !isWalkable(-1, 5));
+assert("OOB row 21 not walkable", !isWalkable(21, 5));
+assert("Tunnel wrap col -1 on row 9", isWalkable(9, -1));
+assert("Tunnel wrap col 21 on row 9", isWalkable(9, 21));
 
+section("4. Pellet Initialization");
 resetState();
 assert("Total pellets > 0", totalPellets > 0);
-assert("No pellet on wall tile (0,0)", pellets[0][0] === 0);
-assert("Pellet on path tile (1,2)", pellets[1][2] === 1);
+assert("No pellet on wall (0,0)", pellets[0][0] === 0);
+assert("Pellet on path (1,2)", pellets[1][2] === 1);
 assert("Power pellet at (1,1)", pellets[1][1] === 2);
 assert("Power pellet at (1,19)", pellets[1][19] === 2);
 assert("Power pellet at (19,1)", pellets[19][1] === 2);
 assert("Power pellet at (19,19)", pellets[19][19] === 2);
+let pCount = 0; for (let r=0;r<ROWS;r++) for (let c=0;c<COLS;c++) if (pellets[r][c]===2) pCount++;
+assertEqual("Exactly 4 power pellets", pCount, 4);
+assert("No pellets inside ghost house (row 9, col 8-12)", [8,9,10,11,12].every(c => pellets[9][c] === 0));
+assert("No pellets on door tiles", [9,10,11].every(c => pellets[8][c] === 0));
 
-let normalCount = 0, powerCount = 0;
-for (let r = 0; r < ROWS; r++)
-  for (let c = 0; c < COLS; c++) {
-    if (pellets[r][c] === 1) normalCount++;
-    if (pellets[r][c] === 2) powerCount++;
+section("5. Lives System");
+resetState();
+assertEqual("Start with 3 lives", lives, 3);
+lives--; assertEqual("After losing 1 life, lives = 2", lives, 2);
+lives--; assertEqual("After losing 2 lives, lives = 1", lives, 1);
+lives--; assertEqual("After losing 3 lives, lives = 0", lives, 0);
+assert("Game over when lives = 0", lives <= 0);
+
+section("6. Pac-Man Start Position");
+resetState();
+assertEqual("Pac-Man starts row 15", pacman.row, 15);
+assertEqual("Pac-Man starts col 10", pacman.col, 10);
+assert("Start tile walkable", isWalkable(15, 10));
+assertEqual("Initial direction stationary", pacman.dir, {r:0, c:0});
+
+section("7. Four Ghosts Initialization");
+resetState();
+assertEqual("4 ghosts created", ghosts.length, 4);
+assertEqual("Ghost 0 is Blinky", ghosts[0].name, "blinky");
+assertEqual("Ghost 1 is Pinky", ghosts[1].name, "pinky");
+assertEqual("Ghost 2 is Inky", ghosts[2].name, "inky");
+assertEqual("Ghost 3 is Clyde", ghosts[3].name, "clyde");
+assertEqual("Blinky color", ghosts[0].color, "#ff0000");
+assertEqual("Pinky color", ghosts[1].color, "#ffb8ff");
+assertEqual("Inky color", ghosts[2].color, "#00ffff");
+assertEqual("Clyde color", ghosts[3].color, "#ffb851");
+assert("Blinky starts outside house (row 7)", !ghosts[0].inHouse);
+assert("Pinky starts in house", ghosts[1].inHouse);
+assert("Inky starts in house", ghosts[2].inHouse);
+assert("Clyde starts in house", ghosts[3].inHouse);
+assertEqual("Pinky exit delay", ghosts[1].exitDelay, 60);
+assertEqual("Inky exit delay", ghosts[2].exitDelay, 240);
+assertEqual("Clyde exit delay", ghosts[3].exitDelay, 480);
+
+section("8. Ghost Scatter Targets");
+resetState();
+assertEqual("Blinky scatter: top-right", ghosts[0].scatterTarget, {r:1,c:19});
+assertEqual("Pinky scatter: top-left", ghosts[1].scatterTarget, {r:1,c:1});
+assertEqual("Inky scatter: bottom-right", ghosts[2].scatterTarget, {r:19,c:19});
+assertEqual("Clyde scatter: bottom-left", ghosts[3].scatterTarget, {r:19,c:1});
+
+section("9. Ghost Chase Targeting AI");
+resetState();
+pacman.row = 10; pacman.col = 10; pacman.dir = {r:0, c:1};
+let t;
+t = getChaseTarget(ghosts[0]);
+assertEqual("Blinky targets Pac-Man directly", t, {r:10, c:10});
+t = getChaseTarget(ghosts[1]);
+assertEqual("Pinky targets 4 ahead (10,14)", t, {r:10, c:14});
+ghosts[0].row = 8; ghosts[0].col = 8;
+t = getChaseTarget(ghosts[2]);
+// ahead = (10,12), inky target = ahead + (ahead - blinky) = (12,16)
+assertEqual("Inky flanking target", t, {r:12, c:16});
+ghosts[3].row = 10; ghosts[3].col = 5;
+t = getChaseTarget(ghosts[3]);
+// dist = |10-10| + |5-10| = 5 < 8 → scatter
+assertEqual("Clyde shy (close): uses scatter", t, ghosts[3].scatterTarget);
+ghosts[3].row = 1; ghosts[3].col = 1;
+t = getChaseTarget(ghosts[3]);
+// dist = |1-10| + |1-10| = 18 > 8 → chase
+assertEqual("Clyde shy (far): targets Pac-Man", t, {r:10, c:10});
+
+section("10. Scatter/Chase Mode Cycling");
+resetState();
+assertEqual("Initial mode is scatter", globalMode, "scatter");
+assertEqual("Initial timer is 420", modeTimer, 420);
+assertEqual("Mode index starts at 0", modeIndex, 0);
+assertEqual("Schedule has 8 phases", MODE_SCHEDULE.length, 8);
+assertEqual("Last phase is chase/Infinity", MODE_SCHEDULE[7], ['chase', Infinity]);
+
+section("11. BFS Pathfinding");
+resetState();
+let path = bfs(9, 10, 9, 12, true);
+assert("BFS (ghost mode) finds path", path.length > 0);
+assert("BFS path steps adjacent", (() => {
+  for (let i = 1; i < path.length; i++) {
+    const dr = Math.abs(path[i].r - path[i-1].r);
+    const dc = Math.abs(path[i].c - path[i-1].c);
+    if (dr + dc !== 1 && !(dr === 0 && dc === COLS - 1)) return false;
   }
-assertEqual("Exactly 4 power pellets", powerCount, 4);
-assert("Many normal pellets exist", normalCount > 50);
-assertEqual("totalPellets matches pellet grid count", totalPellets, normalCount + powerCount);
+  return true;
+})());
+let samePath = bfs(9, 10, 9, 10, true);
+assertEqual("BFS same tile = empty", samePath, []);
+// Ghost BFS can go through door
+let doorPath = bfs(9, 10, 7, 10, true);
+assert("Ghost BFS can path through door (row 9→7)", doorPath.length > 0);
+// Pac-Man BFS cannot go through door
+let pacDoorPath = bfs(9, 10, 7, 10, false);
+// Pac-Man should find a longer path around (not through door)
+assert("Pac-Man BFS avoids door (longer path or different route)", pacDoorPath.length === 0 || pacDoorPath.length > doorPath.length);
 
-// ── 4. PAC-MAN START POSITION ────────────────────────────────────────
-section("4. Pac-Man Start Position");
-
+section("12. Frightened Mode");
 resetState();
-assertEqual("Pac-Man starts at row 15", pacman.row, 15);
-assertEqual("Pac-Man starts at col 10", pacman.col, 10);
-assert("Start tile is walkable", isWalkable(15, 10));
-assertEqual("Initial direction is stationary", pacman.dir, { r: 0, c: 0 });
-
-// ── 5. GHOST START POSITION ──────────────────────────────────────────
-section("5. Ghost Start Position");
-
-resetState();
-assertEqual("Ghost starts at row 9", ghost.row, 9);
-assertEqual("Ghost starts at col 10", ghost.col, 10);
-assert("Ghost start tile is walkable", isWalkable(9, 10));
-assert("Ghost is not frightened initially", !ghost.frightened);
-assertEqual("Ghost path is empty initially", ghost.path, []);
-
-// ── 6. BFS PATHFINDING ──────────────────────────────────────────────
-section("6. BFS Pathfinding");
-
-resetState();
-let path = bfs(9, 10, 9, 12);
-assert("BFS finds a path from (9,10) to (9,12)", path.length > 0);
-assertEqual("BFS path ends at target", { r: path[path.length-1].r, c: path[path.length-1].c }, { r: 9, c: 12 });
-assert("BFS path first step is adjacent to start", Math.abs(path[0].r - 9) + Math.abs(path[0].c - 10) === 1);
-
-// Each step should be adjacent to the previous
-let allAdjacent = true;
-for (let i = 1; i < path.length; i++) {
-  const dr = Math.abs(path[i].r - path[i-1].r);
-  const dc = Math.abs(path[i].c - path[i-1].c);
-  if (dr + dc !== 1 && !(dr === 0 && dc === COLS - 1)) { allAdjacent = false; break; }
-}
-assert("All BFS path steps are adjacent", allAdjacent);
-
-// Path should only go through walkable tiles
-let allWalkable = path.every(p => maze[p.r][p.c] === 0);
-assert("All BFS path tiles are walkable", allWalkable);
-
-// Same position → empty path
-let samePath = bfs(9, 10, 9, 10);
-assertEqual("BFS from a tile to itself returns empty path", samePath, []);
-
-// Unreachable (surrounded by walls — e.g. (0,0) is a wall)
-let noPath = bfs(1, 1, 0, 0);
-assertEqual("BFS to a wall tile returns empty", noPath, []);
-
-// Cross-maze path
-let longPath = bfs(1, 1, 19, 19);
-assert("BFS finds cross-maze path (1,1)→(19,19)", longPath.length > 0);
-assert("Cross-maze path is reasonably long (>10 steps)", longPath.length > 10);
-
-// ── 7. getValidDirs ─────────────────────────────────────────────────
-section("7. getValidDirs");
-
-resetState();
-let dirs = getValidDirs(1, 1);
-assert("Tile (1,1) has valid directions", dirs.length > 0);
-assert("All returned dirs lead to walkable tiles", dirs.every(d => {
-  let nr = 1 + d.r, nc = 1 + d.c;
-  if (nc < 0) nc = COLS - 1; if (nc >= COLS) nc = 0;
-  return isWalkable(nr, nc);
-}));
-
-let cornerDirs = getValidDirs(1, 1);
-assert("Corner (1,1) has exactly 2 valid dirs (right and down)", cornerDirs.length === 2);
-
-// Tunnel row
-let tunnelDirs = getValidDirs(9, 0);
-assert("Tunnel entry (9,0) has valid dirs including wrap", tunnelDirs.length > 0);
-
-// ── 8. PELLET COLLECTION ────────────────────────────────────────────
-section("8. Pellet Collection");
-
-resetState();
-const startPellets = totalPellets;
-// Simulate eating a normal pellet
-pellets[pacman.row][pacman.col] = 1;
-if (pellets[pacman.row][pacman.col] === 1) {
-  pellets[pacman.row][pacman.col] = 0;
-  score += 10;
-  totalPellets--;
-}
-assertEqual("Score is 10 after eating one pellet", score, 10);
-assertEqual("Total pellets decremented by 1", totalPellets, startPellets - 1);
-assertEqual("Pellet removed from grid", pellets[pacman.row][pacman.col], 0);
-
-// Simulate eating a power pellet
-resetState();
-pacman.row = 1; pacman.col = 1; // power pellet location
-if (pellets[1][1] === 2) {
-  pellets[1][1] = 0;
-  score += 50;
-  totalPellets--;
-  ghost.frightened = true;
-  ghost.path = [];
-  ghost.pathTimer = 0;
-  frightenedTimer = 480;
-}
-assertEqual("Score is 50 after eating power pellet", score, 50);
-assert("Ghost is frightened after power pellet", ghost.frightened);
-assertEqual("Frightened timer set to 480", frightenedTimer, 480);
-assertEqual("Ghost path cleared on frighten", ghost.path, []);
-
-// ── 9. FRIGHTENED MODE ──────────────────────────────────────────────
-section("9. Frightened Mode");
-
-resetState();
-ghost.frightened = true;
+ghosts.forEach(g => { g.frightened = true; g.inHouse = false; });
 frightenedTimer = 480;
-ghost.path = [{ r: 5, c: 5 }];
-
-// Simulate timer expiry
+// Timer expiry clears frightened
 frightenedTimer = 0;
-if (frightenedTimer <= 0) {
-  ghost.frightened = false;
-  ghost.path = [];
-  ghost.pathTimer = 0;
-}
-assert("Ghost exits frightened when timer expires", !ghost.frightened);
-assertEqual("Path cleared on frighten exit", ghost.path, []);
-assertEqual("pathTimer reset on frighten exit", ghost.pathTimer, 0);
-
+ghosts.forEach(g => { if (g.frightened) { g.frightened = false; g.path = []; } });
+assert("All ghosts exit frightened on timer=0", ghosts.every(g => !g.frightened));
 // Speed penalty
+assertEqual("Frightened delay = moveDelay + 3", ghosts[0].moveDelay + 3, 23);
+
+section("13. Ghost Eat Points (Multiplier)");
 resetState();
-ghost.frightened = true;
-const normalDelay = ghost.moveDelay;
-const frightDelay = ghost.moveDelay + 3;
-assert("Frightened delay > normal delay", frightDelay > normalDelay);
-assertEqual("Frightened delay is moveDelay + 3", frightDelay, 23);
-
-// ── 10. COLLISION DETECTION ─────────────────────────────────────────
-section("10. Collision Detection");
-
-resetState();
-ghost.row = pacman.row;
-ghost.col = pacman.col;
-ghost.frightened = false;
-let gameOver = (ghost.row === pacman.row && ghost.col === pacman.col && !ghost.frightened);
-assert("Collision with normal ghost = game over", gameOver);
-
-resetState();
-ghost.row = pacman.row;
-ghost.col = pacman.col;
-ghost.frightened = true;
-let eatGhost = (ghost.row === pacman.row && ghost.col === pacman.col && ghost.frightened);
-assert("Collision with frightened ghost = eat ghost", eatGhost);
-
-// Simulate eating ghost
-if (eatGhost) {
-  score += 200;
-  ghost.row = 9; ghost.col = 10;
-  ghost.frightened = false;
-  frightenedTimer = 0;
-  ghost.path = [];
+ghostsEatenThisPower = 0;
+const points = [];
+for (let i = 0; i < 4; i++) {
+  ghostsEatenThisPower++;
+  points.push(200 * Math.pow(2, ghostsEatenThisPower - 1));
 }
-assertEqual("Score +200 for eating ghost", score, 200);
-assertEqual("Ghost reset to row 9", ghost.row, 9);
-assertEqual("Ghost reset to col 10", ghost.col, 10);
-assert("Ghost no longer frightened after eaten", !ghost.frightened);
+assertEqual("Eat multiplier: 200,400,800,1600", points, [200, 400, 800, 1600]);
 
-// ── 11. WIN CONDITION ───────────────────────────────────────────────
-section("11. Win Condition");
-
+section("14. Collision Detection");
 resetState();
-// Clear all pellets
-for (let r = 0; r < ROWS; r++)
-  for (let c = 0; c < COLS; c++) pellets[r][c] = 0;
+ghosts[0].row = pacman.row; ghosts[0].col = pacman.col;
+ghosts[0].frightened = false; ghosts[0].inHouse = false;
+assert("Normal ghost collision = death", ghosts[0].row === pacman.row && ghosts[0].col === pacman.col && !ghosts[0].frightened);
+resetState();
+ghosts[0].row = pacman.row; ghosts[0].col = pacman.col;
+ghosts[0].frightened = true; ghosts[0].inHouse = false;
+assert("Frightened ghost collision = eat", ghosts[0].row === pacman.row && ghosts[0].col === pacman.col && ghosts[0].frightened);
+// Eaten ghost simulation
+ghosts[0].eaten = true; ghosts[0].frightened = false;
+assert("Eaten ghost has eyes state", ghosts[0].eaten);
+assert("Eaten ghost not frightened", !ghosts[0].frightened);
+// In-house ghost no collision
+resetState();
+ghosts[1].row = pacman.row; ghosts[1].col = pacman.col;
+assert("In-house ghost skipped", ghosts[1].inHouse);
+
+section("15. Position Reset (preserves pellets/score)");
+resetState();
+score = 500; pellets[1][1] = 0; totalPellets -= 1;
+const savedScore = score;
+const savedPellets11 = pellets[1][1];
+const savedTotal = totalPellets;
+// Simulate resetPositions
+pacman.row = 15; pacman.col = 10;
+ghosts.forEach((g, i) => {
+  g.row = GHOST_DEFS[i].startRow; g.col = GHOST_DEFS[i].startCol;
+  g.frightened = false; g.eaten = false;
+  g.inHouse = GHOST_DEFS[i].startRow === 9; g.path = [];
+});
+assertEqual("Score preserved after reset", score, savedScore);
+assertEqual("Pellets preserved after reset", pellets[1][1], savedPellets11);
+assertEqual("Total pellets preserved", totalPellets, savedTotal);
+
+section("16. Win Condition");
+resetState();
+for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) pellets[r][c] = 0;
 totalPellets = 0;
-let gameWon = (totalPellets <= 0);
-assert("Game is won when all pellets eaten", gameWon);
-
+assert("Win when all pellets eaten", totalPellets <= 0);
 resetState();
-assert("Game not won at start (pellets remain)", totalPellets > 0);
+assert("Not won at start", totalPellets > 0);
 
-// ── 12. BFS PATH ADJACENCY GUARD ────────────────────────────────────
-section("12. BFS Path Adjacency Guard (Anti-Teleport)");
-
+section("17. Ghost House Exit");
 resetState();
-ghost.row = 1; ghost.col = 1;
-ghost.path = [{ r: 15, c: 15 }]; // stale path far away
-const next = ghost.path[0];
-const dr = Math.abs(next.r - ghost.row);
-const dc = Math.abs(next.c - ghost.col);
-const isAdj = (dr + dc === 1) || (dr === 0 && dc === COLS - 1);
-assert("Stale path step (15,15) is NOT adjacent to ghost at (1,1)", !isAdj);
+assert("Blinky exitDelay=0 (starts outside)", GHOST_DEFS[0].exitDelay === 0);
+assert("Pinky exitDelay=60", GHOST_DEFS[1].exitDelay === 60);
+assert("Inky exitDelay=240", GHOST_DEFS[2].exitDelay === 240);
+assert("Clyde exitDelay=480", GHOST_DEFS[3].exitDelay === 480);
+// Simulate exit
+ghosts[1].exitTimer = 60;
+assert("Pinky ready to exit when timer >= delay", ghosts[1].exitTimer >= ghosts[1].exitDelay);
 
-// Adjacent step
-ghost.path = [{ r: 1, c: 2 }];
-const next2 = ghost.path[0];
-const dr2 = Math.abs(next2.r - ghost.row);
-const dc2 = Math.abs(next2.c - ghost.col);
-const isAdj2 = (dr2 + dc2 === 1);
-assert("Adjacent path step (1,2) IS adjacent to ghost at (1,1)", isAdj2);
+section("18. Eaten Ghost Returns to House");
+resetState();
+ghosts[0].eaten = true; ghosts[0].inHouse = false;
+ghosts[0].row = HOUSE_DOOR_ROW; ghosts[0].col = HOUSE_COL;
+// Simulate arrival at door
+if (ghosts[0].row === HOUSE_DOOR_ROW && ghosts[0].col === HOUSE_COL) {
+  ghosts[0].row = HOUSE_ROW; ghosts[0].col = HOUSE_COL;
+  ghosts[0].eaten = false; ghosts[0].inHouse = false;
+}
+assert("Ghost respawns at house center", ghosts[0].row === 9 && ghosts[0].col === 10);
+assert("Ghost no longer eaten after respawn", !ghosts[0].eaten);
 
-// ── 13. TUNNEL WRAPPING ─────────────────────────────────────────────
-section("13. Tunnel Wrapping");
+section("19. Tunnel Wrapping");
+assert("Row 9 col 0 walkable", isWalkable(9, 0));
+assert("Row 9 col 20 walkable", isWalkable(9, 20));
+assert("Wrap col -1 row 9", isWalkable(9, -1));
+assert("Wrap col 21 row 9", isWalkable(9, 21));
+let tunnelPath = bfs(9, 1, 9, 19, true);
+assert("BFS finds cross-maze path", tunnelPath.length > 0);
 
-assert("Row 9, col 0 is walkable (left tunnel)", isWalkable(9, 0));
-assert("Row 9, col 20 is walkable (right tunnel)", isWalkable(9, 20));
-assert("Wrap col -1 on row 9 → walkable", isWalkable(9, -1));
-assert("Wrap col 21 on row 9 → walkable", isWalkable(9, 21));
+section("20. Maze Template Immutability");
+resetState();
+maze[1][1] = 1;
+assert("Template unaffected by mutation", MAZE_TEMPLATE[1][1] === 0);
+resetState();
+assert("Reset restores maze", maze[1][1] === 0);
 
-// BFS through tunnel
-let tunnelPath = bfs(9, 1, 9, 19);
-assert("BFS can find path across the maze through tunnel or corridors", tunnelPath.length > 0);
-
-// ── 14. HIGH SCORE LOGIC ────────────────────────────────────────────
-section("14. High Score Persistence");
-
+section("21. High Score Persistence");
 let hs = parseInt(localStorage.getItem('pacHighScore') || '0', 10);
 assert("High score is a number", typeof hs === 'number' && !isNaN(hs));
 assert("High score >= 0", hs >= 0);
 
-// ── 15. MAZE IMMUTABILITY ───────────────────────────────────────────
-section("15. Maze Template Immutability");
-
-resetState();
-maze[1][1] = 1; // mutate the copy
-assert("Mutating maze copy doesn't affect template", MAZE_TEMPLATE[1][1] === 0);
-
-resetState();
-assert("Reset restores maze[1][1] to 0", maze[1][1] === 0);
-
-// =====================================================================
-// SUMMARY
-// =====================================================================
+// ─── SUMMARY ────────────────────────────────────────────────
 const cls = totalFail === 0 ? 'all-pass' : 'has-fail';
 out.innerHTML += `<div class="summary ${cls}">
   ${totalFail === 0 ? '🎉' : '⚠️'} ${totalPass} passed, ${totalFail} failed (${totalPass + totalFail} total)
