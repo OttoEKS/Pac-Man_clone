@@ -62,13 +62,18 @@ npx -y http-server . -p 8080 -o
 - READY! pause state before round start.
 - Restart button on win/lose overlay.
 
+### Step 7 — Sound Effects (Web Audio API)
+- Waka-waka dot eating sound.
+- Background chase siren.
+- Power pellet frightened jingle.
+- Fully synthetic zero-dependency audio engine.
+
 ---
 
 ## 🚧 Known Limitations / TODO
 
 - [ ] No fruit bonus items
 - [ ] No multi-level progression (speed increase, maze changes)
-- [ ] No sound effects or music
 - [ ] Tunnel wrapping only on row 9
 - [ ] Mobile touch controls not implemented
 
@@ -78,6 +83,7 @@ npx -y http-server . -p 8080 -o
 
 - **Single HTML file** — no external libraries or frameworks
 - **HTML5 Canvas** for all rendering
+- **Web Audio API** for synthetic sound effects
 - **`requestAnimationFrame`** for the game loop
 - **Google Fonts** — Press Start 2P (retro arcade font)
 - **localStorage** — high score persistence

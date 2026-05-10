@@ -149,6 +149,89 @@ const restartBtn = document.getElementById('restart-btn');
 highScore = parseInt(localStorage.getItem('pacHighScore') || '0', 10);
 highEl.textContent = highScore;
 
+// ─── AUDIO ENGINE ───────────────────────────────────────────
+const AudioContext = window.AudioContext || window.webkitAudioContext;
+const audioCtx = new AudioContext();
+
+const soundEngine = {
+  wakaPitch: 300,
+  sirenOsc: null, sirenGain: null, sirenFreq: 400, sirenDir: 1,
+  powerOsc: null, powerGain: null, powerFreq: 200, powerDir: 1,
+  
+  init() { if (audioCtx.state === 'suspended') audioCtx.resume(); },
+  
+  playWaka() {
+    if (!audioCtx) return;
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = 'triangle';
+    this.wakaPitch = this.wakaPitch === 300 ? 400 : 300;
+    osc.frequency.setValueAtTime(this.wakaPitch, audioCtx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(100, audioCtx.currentTime + 0.1);
+    gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+    osc.connect(gain); gain.connect(audioCtx.destination);
+    osc.start(); osc.stop(audioCtx.currentTime + 0.1);
+  },
+
+  startSiren() {
+    if (this.sirenOsc) return;
+    this.sirenOsc = audioCtx.createOscillator();
+    this.sirenGain = audioCtx.createGain();
+    this.sirenOsc.type = 'triangle';
+    this.sirenOsc.frequency.value = 400;
+    this.sirenGain.gain.value = 0.05;
+    this.sirenOsc.connect(this.sirenGain);
+    this.sirenGain.connect(audioCtx.destination);
+    this.sirenOsc.start();
+  },
+  
+  stopSiren() {
+    if (this.sirenOsc) {
+      this.sirenOsc.stop(); this.sirenOsc.disconnect(); this.sirenOsc = null;
+    }
+  },
+  
+  updateSiren() {
+    if (!this.sirenOsc) return;
+    this.sirenFreq += this.sirenDir * 3;
+    if (this.sirenFreq > 550) this.sirenDir = -1;
+    if (this.sirenFreq < 400) this.sirenDir = 1;
+    this.sirenOsc.frequency.setValueAtTime(this.sirenFreq, audioCtx.currentTime);
+  },
+  
+  startPowerJingle() {
+    if (this.powerOsc) return;
+    this.powerOsc = audioCtx.createOscillator();
+    this.powerGain = audioCtx.createGain();
+    this.powerOsc.type = 'square';
+    this.powerOsc.frequency.value = 200;
+    this.powerGain.gain.value = 0.05;
+    this.powerOsc.connect(this.powerGain);
+    this.powerGain.connect(audioCtx.destination);
+    this.powerOsc.start();
+  },
+  
+  stopPowerJingle() {
+    if (this.powerOsc) {
+      this.powerOsc.stop(); this.powerOsc.disconnect(); this.powerOsc = null;
+    }
+  },
+  
+  updatePowerJingle() {
+    if (!this.powerOsc) return;
+    this.powerFreq += this.powerDir * 10;
+    if (this.powerFreq > 300) this.powerDir = -1;
+    if (this.powerFreq < 150) this.powerDir = 1;
+    this.powerOsc.frequency.setValueAtTime(this.powerFreq, audioCtx.currentTime);
+  },
+
+  stopAll() {
+    this.stopSiren();
+    this.stopPowerJingle();
+  }
+};
+
 // ─── HELPERS ────────────────────────────────────────────────
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
@@ -188,6 +271,7 @@ function drawLives() {
    INIT / RESET
    ============================================================= */
 function init() {
+  soundEngine.stopAll();
   maze = MAZE_TEMPLATE.map(r => [...r]);
 
   pellets = []; totalPellets = 0;
@@ -268,6 +352,7 @@ const KEY_MAP = {
 };
 
 document.addEventListener('keydown', (e) => {
+  soundEngine.init();
   const d = KEY_MAP[e.key];
   if (d) { e.preventDefault(); pacman.nextDir = {...d}; }
 });
@@ -289,7 +374,13 @@ function updatePacman() {
   if (isWalkable(newR, newC)) {
     pacman.row = newR; pacman.col = newC;
     if (pacman.mouthOpen) { pacman.mouthAngle += 0.07; if (pacman.mouthAngle >= 0.3) pacman.mouthOpen = false; }
-    else { pacman.mouthAngle -= 0.07; if (pacman.mouthAngle <= 0.02) pacman.mouthOpen = true; }
+    else { 
+      pacman.mouthAngle -= 0.07; 
+      if (pacman.mouthAngle <= 0.02) {
+        pacman.mouthOpen = true; 
+        soundEngine.playWaka();
+      }
+    }
 
     if (pellets[pacman.row][pacman.col] === 1) {
       pellets[pacman.row][pacman.col] = 0; score += 10; totalPellets--;
@@ -558,6 +649,7 @@ function checkCollisions() {
    LIVES / DEATH
    ============================================================= */
 function loseLife() {
+  soundEngine.stopAll();
   lives--;
   drawLives();
   if (lives <= 0) {
@@ -723,6 +815,7 @@ function drawReadyText() {
    OVERLAY SCREENS
    ============================================================= */
 function showOverlay() {
+  soundEngine.stopAll();
   if (gameWon) {
     overlayT.textContent = 'YOU WIN!';
     overlayT.className = 'win';
@@ -741,6 +834,7 @@ function showOverlay() {
 }
 
 restartBtn.addEventListener('click', () => {
+  soundEngine.init();
   init(); requestAnimationFrame(gameLoop);
 });
 
@@ -777,6 +871,16 @@ function gameLoop() {
   }
 
   // Normal gameplay
+  if (frightenedTimer > 0) {
+    soundEngine.stopSiren();
+    soundEngine.startPowerJingle();
+    soundEngine.updatePowerJingle();
+  } else {
+    soundEngine.stopPowerJingle();
+    soundEngine.startSiren();
+    soundEngine.updateSiren();
+  }
+
   updateModeTimer();
   updateFrightenedTimer();
   updatePacman();
