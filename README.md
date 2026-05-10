@@ -46,31 +46,30 @@ npx -y http-server . -p 8080 -o
 - Live score counter and persistent high score (localStorage)
 - Win condition when all pellets are eaten
 
-### Step 4 — Ghost
-- Single red ghost starts at the centre of the ghost house
-- Classic ghost shape with dome top and wavy bottom
-- Directional eyes that follow movement
-- Game Over on collision with Pac-Man
-- Restart button on win/lose overlay
+### Step 4 & 5 — 4 Ghosts & Advanced AI
+- 4 classic ghosts (Blinky, Pinky, Inky, Clyde) with unique AI targeting.
+- Scatter/Chase mode cycling logic.
+- BFS pathfinding through the maze.
+- 4 power pellets at maze corners (pulsing animation).
+- Frightened mode: ghosts turn blue, run away from Pac-Man.
+- Flashing warning before frightened mode expires.
+- Eating a frightened ghost transforms it into eyes that return to the ghost house, with escalating score multipliers (200, 400, 800, 1600).
+- Ghost house door that only ghosts can pass through.
 
-### Step 5 — Smart Ghost & Power Pellets
-- BFS pathfinding toward Pac-Man (replaces random movement)
-- 4 power pellets at maze corners (pulsing animation)
-- Frightened mode: ghost turns blue, runs away from Pac-Man
-- Flashing warning before frightened mode expires
-- Eating a frightened ghost scores 200 points and resets it to the ghost house
+### Step 6 — Lives System & Polish
+- 3 lives system with visual HUD display.
+- Classic Pac-Man shrinking death animation.
+- READY! pause state before round start.
+- Restart button on win/lose overlay.
 
 ---
 
 ## 🚧 Known Limitations / TODO
 
-- [ ] Only one ghost — classic Pac-Man has four with unique behaviors
 - [ ] No fruit bonus items
 - [ ] No multi-level progression (speed increase, maze changes)
-- [ ] No lives system (currently 1 life per game)
 - [ ] No sound effects or music
 - [ ] Tunnel wrapping only on row 9
-- [ ] Ghost house exit logic could be improved
 - [ ] Mobile touch controls not implemented
 
 ---
